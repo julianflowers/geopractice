@@ -1,0 +1,174 @@
+---
+title: "Cluster summaries"
+output: 
+  html_document: 
+    toc: yes
+    code_folding: 'show'
+
+runtime: shiny
+---  
+
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+This report summarises an the results of an analysis to group English general practices using k-means clustering. Full details of the method can be found [here]("http://rpubs.com/jflowers/243520").
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(dplyr)
+library(readr)
+library(janitor)
+library(purrr)
+library(tidyr)
+library(ggplot2)
+
+gpdata <- read_csv("cluster.csv", col_types = c("ccddddddddii")) %>%
+  clean_names() %>%
+  rename(cluster1 = `_cluster`) %>%
+  mutate(percent_eth = 100 * percent_eth)
+```
+
+```{r}
+sliderInput("cluster", "Select cluster", min = 1, max = 15, value = 5)
+```
+
+
+## Cluster summary
+`r renderText(paste0("Summary for Cluster ", input$cluster))`: mean values for the cluster.
+
+
+
+```{r, echo = FALSE}
+options(digits = 2)
+
+renderTable(
+gpdata %>% 
+  filter(cluster1 == input$cluster) %>% 
+  select(3:11) %>%
+  map(mean) %>%
+  map(round,2) %>%
+  data.frame() %>%
+  select(Ethnicity = percent_eth, 
+         Practice_size = prac_pop, 
+         Deprivation_score = imd2015,
+         `Under_5%` = percent_5, 
+         `Five_to_14%` = percent_5_14,
+         `Under_18%` = percent_18,
+         `Over_65%` = percent_65, 
+         `Over_75%`= percent_75, 
+         `Over_85%` = percent_85
+         ) 
+)
+```
+
+## Cluster profiles
+
+This cluster contains `r renderText(paste0(gpdata %>% count(cluster1) %>% filter(cluster1 == input$cluster) %>% select(n), " practices"))`
+
+### Interpreting the cluster profile plots
+
+These plots show the z-score for each indicator for the cluster. The red dots show the z-score for each cluster and the dotted centre line at 0 is the national average value.
+
+A z-score is a normalised score - if a score is 0 then this is the national average. A z-score of 1 is 1 standard deviation (SD) higher than the national average; a score of -1 is 1 SD lower and so on. 
+
+For example if the `imd2015` is to the right of the centre line, this means on average practices in this cluster are more deprived than England as a whole. If `percent_eth` is to the left of the centre line, this means on average these practices have a lower than average proportion of people with recorded white ethnicity than England as a whole. These practice will tend to be more ehthnically diverse.
+
+The higher the z-score for any indicator, the further from the national average practices in the relevant cluster will tend to be.
+
+```{r, echo=FALSE}
+
+## Scale dataset
+
+gpdatas <- gpdata %>%
+  select(3:11) %>% 
+  map(scale) %>%
+  data.frame() %>%
+  ungroup()
+
+
+renderPlot({
+  gpdatas %>%
+  cbind(gpdata[, 12]) %>%
+  gather(indicator, value,1:9) %>%
+  group_by(cluster1, indicator) %>%
+  summarise(medval = median(value, na.rm = TRUE)) %>%
+  filter(cluster1 == input$cluster) %>%
+  ggplot(aes(indicator, medval)) +
+  geom_point(colour = "red") +
+  geom_line(aes(group = cluster1), colour = "blue")+
+  geom_hline(yintercept = 0, lty = "dotted") +
+  coord_flip()+
+  labs(caption = "Black line = mean value", 
+       title  ="Cluster profile plot", 
+       subtitle = paste("Cluster: ", input$cluster), 
+       y = "z-score") +
+  theme(legend.position = "") +
+  theme_bw() +
+  ylim(c(-3, 3)) +
+  geom_text(x = 9, y = -1.5, label = "below average", size = 2) +
+  geom_text(x = 9, y = 1.5, label = "above average", size = 2)
+}
+)
+```
+
+### Practices in this cluster
+
+The interactive table below shows the practices in `r renderText(paste0("Cluster ", input$cluster))`. 
+
+```{r, echo=FALSE}
+renderDataTable({ 
+gpdata %>%
+  filter(cluster1 == input$cluster) %>%
+  select(Practice = x_area, CCG = ccg, cluster1) 
+}
+)
+
+```
+
+```{r, warning=FALSE, message = FALSE, fig.height= 8, results='asis', fig.align='center'}
+# library(ggmap)
+# 
+# 
+# gpmap <- read_tsv("http://data.gov.uk/data/resource/nhschoices/GP.csv", col_types = c("icccccccccccccddcccccc"))
+# 
+# gpmap <- gpmap %>% clean_names() %>%
+#   select(organisationcode, parentname, latitude, longitude)
+# 
+# gpdata1 <- gpmap %>%
+# left_join(gpdata, by = c("organisationcode" = "x_area")) %>%
+#   filter(cluster1 == input$cluster)
+
+# mymap1 <- get_map("England", source = "google", maptype = "roadmap",  zoom = 6)
+# 
+# map1 <- ggmap(mymap1) + 
+#   geom_jitter(aes( y = latitude, x= longitude, colour = cluster1), 
+#                            data = gpdata1, size = 1.5, alpha = 0.9) + 
+#   coord_map(xlim = c(-6, 2.5), 
+#             ylim = c(49.5, 55.5))
+```
+
+```{r, message=FALSE, warning=FALSE}
+library(ggmap) 
+
+ 
+ 
+gpmap <- read_tsv("http://data.gov.uk/data/resource/nhschoices/GP.csv", col_types = c("icccccccccccccddcccccc")) %>% clean_names()
+gpdata1 <- gpmap %>%
+  left_join(gpdata, by = c("organisationcode" = "x_area"))
+```
+
+## Map of practices in this cluster
+
+```{r, message=FALSE, warning=FALSE}
+renderPlot({
+ggmap(get_map("England", source = "google", maptype = "roadmap",  zoom = 6)) +
+  geom_jitter(aes( y = latitude, x= longitude, colour = cluster1), 
+                           data = filter(gpdata1, cluster1 == input$cluster), size = 1.5, alpha = 0.5)+ coord_map() +
+  labs(title = paste("Geographical distribution of practices in Cluster", input$cluster) ,  y = "", x = "") + 
+  theme(axis.text = element_blank(), legend.position = "")
+}
+)
+```
+
+
