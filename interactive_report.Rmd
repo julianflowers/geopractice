@@ -1,0 +1,212 @@
+---
+title: "Cluster profiles"
+author: 
+date: 
+output: 
+   html_document:
+
+     code_folding: hide
+     number_sections: yes
+     toc: yes
+
+params: 
+ 
+  cluster: 4
+    
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(knitr)
+library(rmarkdown)
+suppressMessages(library(readr))
+library(purrr)
+library(janitor)
+
+options(digits = 3)
+
+cluster <- params$cluster
+
+```
+
+# Introduction
+
+This short report presents summaries for clusters of GP practices grouped on the basis of demographic data into 15 groups. The report summarises the distribution for all practices and presents data for each group.
+
+The data included are:
+
+1. Population 
+  + % Population under 5
+  + % Population under 18
+  + % Population 5-14
+  + % Population over 65
+  + % Population over 75
+  + % Population over 85
+  
+2. IMD 2015 scores (practice level deprivation)
+
+3. % population of white ethnicity
+
+4. Practice size
+
+# Overall summary
+
+The boxplots show the variation between all practices for each indicator and each cluster. It shows 
+
+
+```{r read in data, warning=FALSE, fig.height=10, fig.width = 7, fig.align= 'center'}
+
+library(viridis)
+
+gpdata <- read_csv("cluster.csv", col_types = c("ccddddddddii")) %>%
+  clean_names() %>%
+  rename(cluster1 = `_cluster`) %>%
+  mutate(percent_eth = 100 * percent_eth)
+
+options(scipen = 2)
+ 
+gpdata %>%
+  gather(indicator, value, 3:11) %>%
+  ggplot(aes(cluster1, value, fill = factor(cluster1))) +
+  geom_boxplot() +
+  coord_flip()+
+  facet_wrap(~indicator, scale = "free", nrow = 3)+
+  theme(legend.position = "bottom") +
+  labs(title = "Distribution of demographic variables by cluster", 
+       x = "Cluster", 
+       y = "Value") +
+  scale_fill_viridis(option = "C", discrete = TRUE, name = "Cluster")+
+  scale_x_continuous(breaks = seq(1, 15, 1))
+  
+```
+
+# Summary for `r paste0("Cluster ", params$cluster)`
+
+Cluster `r params$cluster` contains `r gpdata %>% count(cluster1) %>% filter(cluster1 == cluster) %>% select(n) %>% list` practices.
+
+The average values for each indicator for this cluster are shown in the table.
+
+```{r}
+
+gpdata %>% 
+  filter(cluster1 == cluster) %>% 
+  select(3:11) %>%
+  map(mean) %>%
+  data.frame() %>%
+  select(Ethnicity = percent_eth, 
+         Practice_size = prac_pop, 
+         Deprivation_score = imd2015,
+         `Under_5%` = percent_5, 
+         `Five_to_14%` = percent_5_14,
+         `Under_18%` = percent_18,
+         `Over_65%` = percent_65, 
+         `Over_75%`= percent_75, 
+         `Over_85%` = percent_85
+         ) %>%
+  kable(format = "pandoc")
+```
+
+
+## Cluster profiles
+
+### Interpreting the cluster profile plots
+
+These plots show the z-score for each indicator for the cluster. The red dots show the z-score for each cluster and the dotted centre line at 0 is the national average value.
+
+A z-score is a normalised score - if a score is 0 then this is the national average. A z-score of 1 is 1 standard deviation (SD) higher than the national average; a score of -1 is 1 SD lower and so on. 
+
+For example if the IMD score is to the right of the centre line, this means on average practices in this cluster are more deprived than England as a whole.
+
+If `percent_eth` is to the left of the centre line, this means on average these practices have a lower than average proportion of people with recorded white ethnicity than England as a whole. There practice will tend to be more ehthnically diverse.
+
+The higher the z-score for any indicator, the further from the national average practices in the relevant cluster will tend to be.
+
+```{r}
+
+## Scale dataset
+
+gpdatas <- gpdata %>%
+  select(3:11) %>% 
+  map(scale) %>%
+  data.frame() %>%
+  ungroup()
+
+
+gpdatas %>%
+  cbind(gpdata[, 12]) %>%
+  gather(indicator, value,1:9) %>%
+  group_by(cluster1, indicator) %>%
+  summarise(medval = median(value, na.rm = TRUE)) %>%
+  filter(cluster1 == cluster) %>%
+  ggplot(aes(indicator, medval)) +
+  geom_point(colour = "red") +
+  geom_line(aes(group = cluster1), colour = "blue")+
+  geom_hline(yintercept = 0, lty = "dotted") +
+  coord_flip()+
+  labs(caption = "Black line = mean value", 
+       title  ="Cluster profile plot", 
+       subtitle = paste("Cluster: ", cluster), 
+       y = "z-score") +
+  theme(legend.position = "") +
+  theme_bw() +
+  ylim(c(-3, 3)) +
+  geom_text(x = 9, y = -1.5, label = "below average", size = 2) +
+  geom_text(x = 9, y = 1.5, label = "above average", size = 2)
+```
+
+
+
+### Practices in this cluster
+
+The interactive table below shows the practices in `r paste0("Cluster ", params$cluster)`. The data can be downloaded as a spreadsheet from here.
+
+```{r}
+ 
+gpdata %>%
+  filter(cluster1 == cluster) %>%
+  select(Practice = x_area, CCG = ccg, cluster1) %>%
+  DT::datatable(extensions = 'Buttons', options = list(
+    dom = 'Bfrtip',
+    buttons = c('csv', 'excel'),
+    extensions = 'ColReorder', options = list(colReorder = TRUE)))
+  
+
+```
+
+
+## Cluster maps
+
+These maps show the geographical distribution of the practices in `r paste0("Cluster ", params$cluster)`.
+
+```{r, warning=FALSE, message = FALSE, fig.height= 8, results='asis', fig.align='center'}
+library(ggmap)
+
+
+gpmap <- read_tsv("http://data.gov.uk/data/resource/nhschoices/GP.csv", col_types = c("icccccccccccccddcccccc"))
+
+gpmap <- gpmap %>% clean_names() %>%
+  select(organisationcode, parentname, latitude, longitude)
+
+gpdata1 <- gpmap %>%
+  left_join(gpdata, by = c("organisationcode" = "x_area")) %>%
+  filter(cluster1 == cluster)
+
+mymap1 <- get_map("England", source = "google", maptype = "roadmap",  zoom = 6)
+
+map1 <- ggmap(mymap1) + 
+  geom_jitter(aes( y = latitude, x= longitude, colour = cluster1), 
+                           data = gpdata1, size = 1.5, alpha = 0.9) + 
+  coord_map(xlim = c(-6, 2.5), 
+            ylim = c(49.5, 55.5))
+
+map1 + 
+  labs(title = paste("Geographical distribution of practices in Cluster", cluster), 
+       y = "", x = "")+
+  theme(axis.text = element_blank())
+  
+
+```
+
